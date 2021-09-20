@@ -1,0 +1,6 @@
+.DS_Store
+snli_w2v
+*.pkl
+*.txt
+*.graph
+*.graph[_]
