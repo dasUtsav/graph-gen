@@ -135,7 +135,7 @@ class ABSADatasetReader:
         return text
 
     @staticmethod
-    def __read_data__(fname, tokenizer, split, flag):
+    def __read_data__(fname, tokenizer, flag):
 
         print("Loading in {} data...\n" .format(flag))
 
@@ -185,8 +185,8 @@ class ABSADatasetReader:
 
         return all_data, text_total
 
-    def __init__(self, dataset, train, test, split, embed_dim=300):
-        text = ABSADatasetReader.__read_text__([train, test])
+    def __init__(self, dataset, train, val, test, split, embed_dim=300):
+        text = ABSADatasetReader.__read_text__([train, val, test])
 
         # if os.path.exists(dataset+'_gcn_word2idx.pkl'):
         #     print("loading {0} tokenizer...".format(dataset))
@@ -201,8 +201,9 @@ class ABSADatasetReader:
         #     pickle.dump(self.tokenizer.idx2word, f)
         # self.embedding_matrix = build_embedding_matrix(self.tokenizer.word2idx, embed_dim, dataset)
         self.embedding_matrix = build_wordvec_matrix(self.tokenizer.word2idx, embed_dim, dataset)
-        self.train_data, self.text_train = ABSADataset(ABSADatasetReader.__read_data__(train, self.tokenizer, split, flag = 'train'))
-        self.test_data, self.text_test = ABSADataset(ABSADatasetReader.__read_data__(test, self.tokenizer, split, flag = 'test'))
+        self.train_data, self.text_train = ABSADataset(ABSADatasetReader.__read_data__(train, self.tokenizer, flag = 'train'))
+        self.val_data, self.text_val = ABSADataset(ABSADatasetReader.__read_data__(val, self.tokenizer, flag = 'val'))
+        self.test_data, self.text_test = ABSADataset(ABSADatasetReader.__read_data__(test, self.tokenizer, flag = 'test'))
 
         
     

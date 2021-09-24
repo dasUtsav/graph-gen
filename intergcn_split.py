@@ -83,25 +83,53 @@ class INTERGCN(nn.Module):
         return mask*x
 
     def forward(self, encoder, inputs):
-        text_indices, svo, nonsvo = inputs
-        text_len = torch.sum(text_indices != 0, dim=-1)
-        text_len = text_len.to('cpu')
-        # aspect_double_idx = torch.cat([left_len.unsqueeze(1), (left_len+aspect_len-1).unsqueeze(1)], dim=1)
-        text = self.embed(text_indices)
-        text = self.text_embed_dropout(text)
-        # print("pre e: {}\n" .format(text.shape))
-        text_out, enc_hidden = encoder(text, text_len)
+        if len(inputs) == 3:
+            print("Split mode\n")
+            text_indices, svo, nonsvo = inputs
 
+            text_len = torch.sum(text_indices != 0, dim=-1)
+            text_len = text_len.to('cpu')
+            # aspect_double_idx = torch.cat([left_len.unsqueeze(1), (left_len+aspect_len-1).unsqueeze(1)], dim=1)
+            text = self.embed(text_indices)
+            text = self.text_embed_dropout(text)
+            # print("pre e: {}\n" .format(text.shape))
+            text_out, enc_hidden = encoder(text, text_len)
+
+             # feed hidden
+            x1 = F.relu(self.gc1(text_out, svo))
+            x2 = F.relu(self.gc2(text_out, nonsvo))
+            # print("x1 size: {} x2 size: {}\n" .format(x1.size(), x2.size()))
+
+
+        elif len(inputs) == 4:
+            print("Multi Split mode\n")
+            text_indices1, text_indices2, svo, nonsvo = inputs
+
+            text_len1 = torch.sum(text_indices1 != 0, dim=-1)
+            text_len1 = text_len1.to('cpu')
+            text_len2 = torch.sum(text_indices2 != 0, dim=-1)
+            text_len2 = text_len2.to('cpu')
+            # aspect_double_idx = torch.cat([left_len.unsqueeze(1), (left_len+aspect_len-1).unsqueeze(1)], dim=1)
+            text1 = self.embed(text_indices1)
+            text1 = self.text_embed_dropout(text1)
+            text2 = self.embed(text_indices2)
+            text2 = self.text_embed_dropout(text2)
+            # print("pre e: {}\n" .format(text.shape))
+            text_out1, enc_hidden1 = encoder(text1, text_len1)
+            text_out2, enc_hidden2 = encoder(text2, text_len2)
+
+            x1 = F.relu(self.gc1(text_out1, svo))
+            x2 = F.relu(self.gc2(text_out2, nonsvo))
+            # print("x1 size: {} x2 size: {}\n" .format(x1.size(), x2.size()))
+
+       
         # print("text out: {}\n" .format(text_out))
 
         # x = F.relu(self.gc1(self.position_weight(text_out, aspect_double_idx, text_len, aspect_len), adj))
-        # print("x1: {} size: {}\n" .format(x, x.s  ize()))
+        # print("x1: {} size: {}\n" .format(x, x.size()))
 
-        # feed hidden
-        x1 = F.relu(self.gc1(text_out, svo))
-        x2 = F.relu(self.gc2(text_out, nonsvo))
-        # print("x1 size: {} x2 size: {}\n" .format(x1.size(), x2.size()))
-
+    
+        print("x1 size: {} x2 size: {}\n" .format(x1.size(), x2.size()))
         x = torch.cat((x1, x2), 2)
         # print("x size: {}\n" .format(x.size()))
 
@@ -111,23 +139,9 @@ class INTERGCN(nn.Module):
         comp = torch.matmul(x_t, intermed)
         comp = comp.transpose(1, 2)
 
-        # print("comp size: {}\n" .format(comp.size()))
+        print("comp size: {}\n" .format(comp.size()))
 
-        # x = self.fc(x)
-        # print("x: {}\n" .format(x))
-
-        # x_t = x
-
-        # x_t = x_t.transpose(1, 2)
-        # print("x_t size: {}\n" .format(x_t.size()))
-
-        # intermed = self.fc(x)
-        # print("inter size: {}\n" .format(intermed.size()))
-
-        # comp = torch.matmul(x_t, intermed)
-        # print("comp size: {}\n" .format(comp.size()))
-        # comp = comp.transpose(1, 2)
-        # print("comp size: {}\n" .format(comp.size()))
+        return comp
 
         #attention
         # x += 0.2 * x
@@ -137,4 +151,3 @@ class INTERGCN(nn.Module):
         # alpha = alpha_mat
         # x = torch.matmul(alpha, text_out).squeeze(1)
 
-        return comp

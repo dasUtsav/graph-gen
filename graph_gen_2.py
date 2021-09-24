@@ -13,6 +13,7 @@ from numpy.core.fromnumeric import size
 from torch.nn.init import calculate_gain
 import time
 import math
+import sys
 
 from torch.nn.utils.rnn import pack_padded_sequence
 
@@ -30,7 +31,7 @@ from sklearn.model_selection import train_test_split
 from config import config
 from generate_dep_matrix import process_snli
 
-device = config['device']
+device = config['device_gcn']
 
 torch.cuda.empty_cache()
 
@@ -66,7 +67,7 @@ fname_val, fname_test = train_test_split(fname_val_test, test_size=0.5, random_s
 # process_snli(fname_train, train_split)
 # process_snli(fname_test, test_split)
 
-absa_dataset = ABSADatasetReader(dataset, fname_train, fname_test, train_split, embed_dim=embed_dim)
+absa_dataset = ABSADatasetReader(dataset, fname_train, fname_val, fname_test, train_split, embed_dim=embed_dim)
 
 num_words = absa_dataset.tokenizer.idx
 word2idx = absa_dataset.tokenizer.word2idx
@@ -83,10 +84,29 @@ pad_token = word2idx['<pad>']
 print("num_words: {}\n" .format(num_words))
 
 text_test = absa_dataset.text_test
+text_val = absa_dataset.text_val
 
 train_data_loader = BucketIterator(data=absa_dataset.train_data, batch_size=batch_size, shuffle=False)
+val_data_loader = BucketIterator(data=absa_dataset.val_data, batch_size=config['batch_size'], shuffle=False)
 test_data_loader = BucketIterator(data=absa_dataset.test_data, batch_size=batch_size, shuffle=False)
 print("train set size: {} {}\n" .format(len(fname_train), len(absa_dataset.train_data)))
+
+class Logger(object):
+    def __init__(self):
+        self.terminal = sys.stdout
+        self.log = open(config['logs_path_gcn'], "a")
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)  
+
+    def flush(self):
+        #this flush method is needed for python 3 compatibility.
+        #this handles the flush command by doing nothing.
+        #you might want to specify some extra behavior here.
+        pass    
+
+sys.stdout = Logger()
 
 class EncoderRNN(nn.Module):
     def __init__(self, input_size, hidden_size, batch_size, num_layers):
@@ -122,7 +142,7 @@ class DecoderRNN(nn.Module):
 
         # self.embedding = nn.Embedding(output_size, hidden_size)
         self.embedding = nn.Embedding.from_pretrained(torch.tensor(absa_dataset.embedding_matrix, dtype=torch.float))
-        self.gru = nn.GRU(input_size=5*hidden_size, hidden_size=hidden_size, num_layers=dec_num_layers, batch_first=True,  bidirectional=False)
+        self.gru = nn.GRU(input_size=3*hidden_size + 100, hidden_size=hidden_size, num_layers=dec_num_layers, batch_first=True,  bidirectional=False)
         self.out = nn.Linear(hidden_size, output_size)
         self.softmax = nn.LogSoftmax(dim=-1)
 
@@ -304,15 +324,25 @@ def evaluate(encoder, decoder, gcn, input_tensor, target_tensor):
        
         return total_output
 
-def evaluateTest(encoder, decoder, gcn, test_data_loader):
+def evaluateTest(encoder, decoder, gcn, test_data_loader, val_data_loader, epoch, total_epochs):
 
     candidate = []
     reference = []
-    for item in text_test:
-        reference.append([item])
     
     print("Calculating candidate...\n")
-    for batch in test_data_loader:
+
+    if epoch == total_epochs:
+        print("Using test loader\n")
+        data_loader = test_data_loader
+        for item in text_test:
+            reference.append([item])
+    else:
+        print("Using val loader\n")
+        data_loader = val_data_loader
+        for item in text_val:
+            reference.append([item])
+
+    for batch in data_loader:
         graph = process_snli(batch['context'])
         graph = BucketIterator.pad_graph(graph, batch['max_len'])
         input_tensor = [batch['text_indices'].to(device), graph.to(device)]
@@ -380,9 +410,10 @@ def trainIters(encoder, decoder, gcn, encoder_optimizer, decoder_optimizer, gcn_
         if epoch % validate_every == 0:
 
             encoder.eval()
+            gcn.eval()
             decoder.eval()
 
-            bleu_1, bleu_2, bleu_3, bleu_4 = evaluateTest(encoder, decoder, gcn, test_data_loader)
+            bleu_1, bleu_2, bleu_3, bleu_4 = evaluateTest(encoder, decoder, gcn, test_data_loader, val_data_loader, epoch, total_epochs)
             print("bleu_1: {}, bleu_2: {}, bleu_3: {}, bleu_4: {}\n" .format(bleu_1, bleu_2, bleu_3, bleu_4))
 
             with open(dataset+'_gcn_candidate.pkl', 'rb') as f:
@@ -395,6 +426,7 @@ def trainIters(encoder, decoder, gcn, encoder_optimizer, decoder_optimizer, gcn_
                 print("Prediction: {}\nGround Truth: {}\n\n" .format(i, j))
 
             encoder.train()
+            gcn.train()
             decoder.train()
 
         loss_avg = loss_total / len(fname_train)
@@ -443,15 +475,15 @@ gcn.eval()
 
 print("word2idx: {}\n" .format(word2idx['a']))
 
-bleu_1, bleu_2, bleu_3, bleu_4 = evaluateTest(encoder, decoder, gcn, test_data_loader)
-print("bleu_1: {}, bleu_2: {}, bleu_3: {}, bleu_4: {}\n" .format(bleu_1, bleu_2, bleu_3, bleu_4))
+# bleu_1, bleu_2, bleu_3, bleu_4 = evaluateTest(encoder, decoder, gcn, test_data_loader)
+# print("bleu_1: {}, bleu_2: {}, bleu_3: {}, bleu_4: {}\n" .format(bleu_1, bleu_2, bleu_3, bleu_4))
 
-with open(dataset+'_gcn_candidate.pkl', 'rb') as f:
-    candidate = pickle.load(f)
+# with open(dataset+'_gcn_candidate.pkl', 'rb') as f:
+#     candidate = pickle.load(f)
 
-count = 0
-for x, y in zip(candidate, text_test):
-    print("Prediction: {}\nGround Truth: {}\n\n" .format(x, y))
-    if count == 10:
-        break
-    count += 1
+# count = 0
+# for x, y in zip(candidate, text_test):
+#     print("Prediction: {}\nGround Truth: {}\n\n" .format(x, y))
+#     if count == 10:
+#         break
+#     count += 1

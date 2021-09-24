@@ -9,6 +9,7 @@ import os
 import pickle
 import time
 import math
+import sys
 
 from intergcn_split import INTERGCN
 from data_utils_split import ABSADatasetReader
@@ -25,7 +26,7 @@ from sklearn.model_selection import train_test_split
 from config import config
 from generate_dep_matrix import process_snli, process_nonsvo, process_svo
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = config['device_split']
 
 fname = './snli_sentences_all.txt'
 fin = open(fname, 'r')
@@ -34,14 +35,13 @@ snli_data = fin.readlines()
 fname_train, fname_val_test = train_test_split(snli_data, train_size=config['train_split'], test_size=config['test_split'], random_state=10)
 fname_val, fname_test = train_test_split(fname_val_test, test_size=0.5, random_state=10)
 
-absa_dataset = ABSADatasetReader(config['dataset'], fname_train, fname_test, config['train_split'], embed_dim=config['embed_dim'])
+absa_dataset = ABSADatasetReader(config['dataset'], fname_train, fname_val, fname_test, config['train_split'], embed_dim=config['embed_dim'])
 
 num_words = absa_dataset.tokenizer.idx
 word2idx = absa_dataset.tokenizer.word2idx
 idx2word = absa_dataset.tokenizer.idx2word
 embed = nn.Embedding.from_pretrained(torch.tensor(absa_dataset.embedding_matrix, dtype=torch.float)).to(device)
 embed_dropout = nn.Dropout(config['dropout_rate'])
-        
 
 # print("test shuffle: {}\n" .format(test_data_loader.shuffle))
 
@@ -53,11 +53,35 @@ pad_token = config['PAD_token']
 print("num_words: {}\n" .format(num_words))
 
 text_test = absa_dataset.text_test
+text_val = absa_dataset.text_val
 
 train_data_loader = BucketIterator(data=absa_dataset.train_data, batch_size=config['batch_size'], shuffle=False)
+val_data_loader = BucketIterator(data=absa_dataset.val_data, batch_size=config['batch_size'], shuffle=False)
 test_data_loader = BucketIterator(data=absa_dataset.test_data, batch_size=config['batch_size'], shuffle=False)
 
-# print("word2idx: {}\n" .format(word2idx))
+split1_loader = test_data_loader.batches[:test_data_loader.batch_len//2]
+split1_text = text_test[:(len(split1_loader)*config['batch_size'])]
+split2_loader = test_data_loader.batches[test_data_loader.batch_len//2:]
+split2_text = text_test[(len(split2_loader)*config['batch_size']):]
+
+print("loader lens: {} {} {}\n" .format(test_data_loader.batch_len, len(split1_loader), len(split2_loader)))
+
+class Logger(object):
+    def __init__(self):
+        self.terminal = sys.stdout
+        self.log = open(config['logs_path_split'], "a")
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)  
+
+    def flush(self):
+        #this flush method is needed for python 3 compatibility.
+        #this handles the flush command by doing nothing.
+        #you might want to specify some extra behavior here.
+        pass        
+
+sys.stdout = Logger()
 
 class EncoderRNN(nn.Module):
     def __init__(self, input_size, hidden_size, batch_size, num_layers):
@@ -123,6 +147,8 @@ def calc_time(start):
 
 def get_pred_words(total_output):
 
+    # TODO: test get_pred_words
+
     decoded_words = []
     
     for sentence in total_output:
@@ -157,8 +183,6 @@ def calc_bleu(candidate, reference):
     return bleu_1, bleu_2, bleu_3, bleu_4
 
 def train(input_tensor, target_tensor, encoder, decoder, gcn, encoder_optimizer, decoder_optimizer, gcn_optimizer, criterion):
-
-    # TODO: validation dataset after each epoch
 
     encoder_optimizer.zero_grad()
     decoder_optimizer.zero_grad()
@@ -272,15 +296,82 @@ def evaluate(encoder, decoder, gcn, input_tensor, target_tensor):
        
         return total_output
 
-def evaluateTest(encoder, decoder, gcn, test_data_loader):
+def multi_split(encoder, decoder, gcn, split1_loader, split2_loader, split1_text, split2_text):
+
+    candidate1 = []
+    candidate2 = []
+    
+    print("Calculating candidate...\n")
+
+    for batch1, batch2 in zip(split1_loader, split2_loader):
+
+        print(len(batch1['text_indices'][0]), len(batch2['text_indices'][0]))
+        if len(batch1['text_indices'][0]) != len(batch2['text_indices'][0]):
+            continue
+
+        svo1 = process_svo(batch1['context'])
+        nonsvo2 = process_nonsvo(batch2['context'])
+        svo1 = BucketIterator.pad_graph(svo1, batch1['max_len'])
+        nonsvo2 = BucketIterator.pad_graph(nonsvo2, batch2['max_len'])
+
+        svo2 = process_svo(batch2['context'])
+        nonsvo1 = process_nonsvo(batch1['context'])
+        svo2 = BucketIterator.pad_graph(svo2, batch2['max_len'])
+        nonsvo1 = BucketIterator.pad_graph(nonsvo1, batch1['max_len'])
+
+        input_tensor1 = [batch1['text_indices'].to(device), batch2['text_indices'].to(device), svo1.to(device), nonsvo2.to(device)]
+        target_tensor1 = batch1['text_indices'].to(device)
+
+        input_tensor2 = [batch2['text_indices'].to(device), batch1['text_indices'].to(device), svo2.to(device), nonsvo1.to(device)]
+        target_tensor2 = batch2['text_indices'].to(device)
+
+        total_output = evaluate(encoder, decoder, gcn, input_tensor1, target_tensor1)
+        output_sentences = get_pred_words(total_output)
+        candidate1.append(output_sentences)
+
+        total_output = evaluate(encoder, decoder, gcn, input_tensor2, target_tensor2)
+        output_sentences = get_pred_words(total_output)
+        candidate2.append(output_sentences)
+
+    candidate1 = [val for sublist in candidate1 for val in sublist]
+    candidate2 = [val for sublist in candidate2 for val in sublist]
+
+    print("candidate 1 size: {}\n" .format(len(candidate1)))
+    print("candidate 2 size: {}\n" .format(len(candidate2)))
+
+    choice_indices = np.random.choice(len(candidate1), 10, replace=False)
+    x = [candidate1[i] for i in choice_indices]
+    y = [split1_text[i] for i in choice_indices]
+    z = [split2_text[i] for i in choice_indices]
+    for i, j, k in zip(x, y, z):
+        print("Prediction: {}\nset1 Truth: {}\nset2 Truth: {}\n\n" .format(i, j, k))
+
+    choice_indices = np.random.choice(len(candidate2), 10, replace=False)
+    x = [candidate2[i] for i in choice_indices]
+    y = [split1_text[i] for i in choice_indices]
+    z = [split2_text[i] for i in choice_indices]
+    for i, j, k in zip(x, y, z):
+        print("Prediction: {}\nset1 Truth: {}\nset2 Truth: {}\n\n" .format(i, j, k))
+
+def evaluateTest(encoder, decoder, gcn, test_data_loader, val_data_loader, epoch, total_epochs):
 
     candidate = []
     reference = []
-    for item in text_test:
-        reference.append([item])
     
     print("Calculating candidate...\n")
-    for batch in test_data_loader:
+
+    if epoch == total_epochs + 1:
+        print("Using test loader\n")
+        data_loader = test_data_loader
+        for item in text_test:
+            reference.append([item])
+    else:
+        print("Using val loader\n")
+        data_loader = val_data_loader
+        for item in text_val:
+            reference.append([item])
+
+    for batch in data_loader:
         svo = process_svo(batch['context'])
         nonsvo = process_nonsvo(batch['context'])
         svo = BucketIterator.pad_graph(svo, batch['max_len'])
@@ -353,9 +444,10 @@ def trainIters(encoder, decoder, gcn, encoder_optimizer, decoder_optimizer, gcn_
         if epoch % config['validate_every'] == 0:
 
             encoder.eval()
+            gcn.eval()
             decoder.eval()
 
-            bleu_1, bleu_2, bleu_3, bleu_4 = evaluateTest(encoder, decoder, gcn, test_data_loader)
+            bleu_1, bleu_2, bleu_3, bleu_4 = evaluateTest(encoder, decoder, gcn, test_data_loader, val_data_loader, epoch, total_epochs)
             print("bleu_1: {}, bleu_2: {}, bleu_3: {}, bleu_4: {}\n" .format(bleu_1, bleu_2, bleu_3, bleu_4))
 
             with open(config['dataset'] + '_gcn_candidate.pkl', 'rb') as f:
@@ -368,6 +460,7 @@ def trainIters(encoder, decoder, gcn, encoder_optimizer, decoder_optimizer, gcn_
                 print("Prediction: {}\nGround Truth: {}\n\n" .format(i, j))
 
             encoder.train()
+            gcn.train()
             decoder.train()
 
         loss_avg = loss_total / len(fname_train)
@@ -379,8 +472,6 @@ def trainIters(encoder, decoder, gcn, encoder_optimizer, decoder_optimizer, gcn_
 # **************************************************************************************************************
 # **************************************************************************************************************
 
-# TODO: test get_pred_words
-
 encoder = EncoderRNN(config['embed_dim'], config['hidden_size'], config['batch_size'], config['enc_num_layers']).to(device)
 gcn = INTERGCN(absa_dataset.embedding_matrix, config['hidden_size']).to(device)
 decoder = DecoderRNN(config['hidden_size'], num_words).to(device)
@@ -390,23 +481,23 @@ decoder_optimizer = optim.Adam(decoder.parameters(), lr=config['learning_rate'])
 gcn_optimizer = optim.Adam(gcn.parameters(), lr=config['learning_rate'])
 epoch = 0
 
-# checkpoint = torch.load(config['model_path'])
-# encoder.load_state_dict(checkpoint['enc_model_state_dict'])
-# decoder.load_state_dict(checkpoint['dec_model_state_dict'])
-# gcn.load_state_dict(checkpoint['gcn_model_state_dict'])
-# encoder_optimizer.load_state_dict(checkpoint['enc_optimizer_state_dict'])
-# decoder_optimizer.load_state_dict(checkpoint['dec_optimizer_state_dict'])
-# gcn_optimizer.load_state_dict(checkpoint['gcn_optimizer_state_dict'])
-# epoch = checkpoint['epoch']
-# prev_loss = checkpoint['loss']
+checkpoint = torch.load(config['model_path'])
+encoder.load_state_dict(checkpoint['enc_model_state_dict'])
+decoder.load_state_dict(checkpoint['dec_model_state_dict'])
+gcn.load_state_dict(checkpoint['gcn_model_state_dict'])
+encoder_optimizer.load_state_dict(checkpoint['enc_optimizer_state_dict'])
+decoder_optimizer.load_state_dict(checkpoint['dec_optimizer_state_dict'])
+gcn_optimizer.load_state_dict(checkpoint['gcn_optimizer_state_dict'])
+epoch = checkpoint['epoch']
+prev_loss = checkpoint['loss']
 
-# print("prev loss: {}\n" .format(prev_loss))
-# print("starting from epoch: {}\n" .format(epoch + 1))
+print("prev loss: {}\n" .format(prev_loss))
+print("starting from epoch: {}\n" .format(epoch + 1))
 
-encoder.train()
-decoder.train()
-gcn.train()
-trainIters(encoder, decoder, gcn, encoder_optimizer, decoder_optimizer, gcn_optimizer, train_data_loader, current_epochs = epoch + 1, total_epochs = config['total_epochs'])
+# encoder.train()
+# decoder.train()
+# gcn.train()
+# trainIters(encoder, decoder, gcn, encoder_optimizer, decoder_optimizer, gcn_optimizer, train_data_loader, current_epochs = epoch + 1, total_epochs = config['total_epochs'])
 
 print("starting evaluation...\n")
 
@@ -416,15 +507,17 @@ gcn.eval()
 
 print("word2idx: {}\n" .format(word2idx['a']))
 
-bleu_1, bleu_2, bleu_3, bleu_4 = evaluateTest(encoder, decoder, gcn, test_data_loader)
-print("bleu_1: {}, bleu_2: {}, bleu_3: {}, bleu_4: {}\n" .format(bleu_1, bleu_2, bleu_3, bleu_4))
+# bleu_1, bleu_2, bleu_3, bleu_4 = evaluateTest(encoder, decoder, gcn, test_data_loader)
+# print("bleu_1: {}, bleu_2: {}, bleu_3: {}, bleu_4: {}\n" .format(bleu_1, bleu_2, bleu_3, bleu_4))
 
-with open(config['dataset'] + '_gcn_candidate.pkl', 'rb') as f:
-    candidate = pickle.load(f)
+# with open(config['dataset'] + '_gcn_candidate.pkl', 'rb') as f:
+#     candidate = pickle.load(f)
 
-count = 0
-for x, y in zip(candidate, text_test):
-    print("Prediction: {}\nGround Truth: {}\n\n" .format(x, y))
-    if count == 10:
-        break
-    count += 1
+# count = 0
+# for x, y in zip(candidate, text_test):
+#     print("Prediction: {}\nGround Truth: {}\n\n" .format(x, y))
+#     if count == 10:
+#         break
+#     count += 1
+
+multi_split(encoder, decoder, gcn, split1_loader, split2_loader, split1_text, split2_text)
