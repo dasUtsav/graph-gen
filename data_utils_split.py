@@ -11,6 +11,7 @@ import json
 import re
 import spacy
 from gensim.models.word2vec import Word2Vec
+from config import config
 
 nlp = spacy.load("en_core_web_sm")
 
@@ -125,17 +126,22 @@ class ABSADataset(object):
 class ABSADatasetReader:
     @staticmethod
     def __read_text__(fnames):
+        max_len = 0 # SOS and EOS
         text = ''
         for fname in fnames:    
             for line in fname:
                 line = line.lower().strip()
                 line = re.sub(r"([.!?])", r" \1", line)
                 line = re.sub(r"[^a-zA-Z.!?]+", r" ", line)
+                temp = nlp(line)
+                temp = [item.text for item in temp]
+                if len(temp) > max_len:
+                    max_len = len(temp)
                 text += line + " "
-        return text
+        return text, max_len
 
     @staticmethod
-    def __read_data__(fname, tokenizer, flag):
+    def __read_data__(fname, tokenizer, max_len, flag):
 
         print("Loading in {} data...\n" .format(flag))
 
@@ -168,6 +174,8 @@ class ABSADatasetReader:
             text_total.append(listified)
 
             text_indices = tokenizer.text_to_sequence(listified)
+            text_padding = [config['PAD_token']] * (max_len - len(text_indices))
+            text_indices = [config['SOS_token']] + text_indices + [config['EOS_token']] + text_padding
             # svo = svo_graph[graph_id]
             # nonsvo = nonsvo_graph[graph_id]
             # print(svo)
@@ -186,7 +194,8 @@ class ABSADatasetReader:
         return all_data, text_total
 
     def __init__(self, dataset, train, val, test, split, embed_dim=300):
-        text = ABSADatasetReader.__read_text__([train, val, test])
+        text, max_len = ABSADatasetReader.__read_text__([train, test])
+        self.max_len = max_len
 
         # if os.path.exists(dataset+'_gcn_word2idx.pkl'):
         #     print("loading {0} tokenizer...".format(dataset))
@@ -201,9 +210,9 @@ class ABSADatasetReader:
         #     pickle.dump(self.tokenizer.idx2word, f)
         # self.embedding_matrix = build_embedding_matrix(self.tokenizer.word2idx, embed_dim, dataset)
         self.embedding_matrix = build_wordvec_matrix(self.tokenizer.word2idx, embed_dim, dataset)
-        self.train_data, self.text_train = ABSADataset(ABSADatasetReader.__read_data__(train, self.tokenizer, flag = 'train'))
-        self.val_data, self.text_val = ABSADataset(ABSADatasetReader.__read_data__(val, self.tokenizer, flag = 'val'))
-        self.test_data, self.text_test = ABSADataset(ABSADatasetReader.__read_data__(test, self.tokenizer, flag = 'test'))
+        self.train_data, self.text_train = ABSADataset(ABSADatasetReader.__read_data__(train, self.tokenizer, max_len, flag = 'train'))
+        self.val_data, self.text_val = ABSADataset(ABSADatasetReader.__read_data__(val, self.tokenizer, max_len, flag = 'val'))
+        self.test_data, self.text_test = ABSADataset(ABSADatasetReader.__read_data__(test, self.tokenizer, max_len, flag = 'test'))
 
         
     

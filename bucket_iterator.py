@@ -12,7 +12,7 @@ import numpy
 from torch.nn.utils.rnn import pad_sequence
 from config import config
 
-device = config['device']
+device = config['device_gcn']
 
 class BucketIterator(object):
     def __init__(self, data, batch_size, sort_key='dependency_graph', shuffle=False, sort=False):

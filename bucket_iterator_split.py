@@ -43,15 +43,15 @@ class BucketIterator(object):
         return { \
             'text_indices': batch_indices.to(config['device'])}
 
-    def pad_graph(graph, max_len):
-
+    def pad_graph(graph, glob_max_len):
+        
         batch_graph = []
 
         # max_len = max([len(v) for k, v in graph.items()])
         
         for k, v in graph.items():
             batch_graph.append(numpy.pad(v, \
-                ((0, max_len - len(v)),(0, max_len - len(v))), 'constant'))
+                ((0, glob_max_len - len(v)),(0, glob_max_len - len(v))), 'constant'))
 
         return torch.tensor(batch_graph)
 
@@ -64,27 +64,27 @@ class BucketIterator(object):
         #     max_len = max_len_graph
         # else:
         #     max_len = max_len_text_indices
-        max_len = max_len_text_indices
-        max_len += 2
+        # max_len = max_len_text_indices
         for item in batch_data:
             context, text_indices = \
                 item['context'], item['text_indices']
-            text_padding = [config['PAD_token']] * (max_len - len(text_indices))
+            # text_padding = [config['PAD_token']] * (max_len - len(text_indices))
             batch_context.append(context)
-            batch_text_indices.append(torch.tensor([config['SOS_token']] + text_indices + [config['EOS_token']]))
+            # batch_text_indices.append(torch.tensor([config['SOS_token']] + text_indices + [config['EOS_token']] + text_padding))
+            # batch_text_indices.append([config['SOS_token']] + text_indices + [config['EOS_token']] + text_padding)
+            batch_text_indices.append(text_indices)
             # batch_svo.append(numpy.pad(svo, \
             #     ((0, max_len - len(svo)),(0, max_len - len(svo))), 'constant'))
             # batch_nonsvo.append(numpy.pad(nonsvo, \
             #     ((0, max_len - len(nonsvo)),(0, max_len - len(nonsvo))), 'constant'))
 
-        batch_text_indices = pad_sequence(batch_text_indices, batch_first=True, padding_value=config['PAD_token'])
+        # batch_text_indices = pad_sequence(batch_text_indices, batch_first=True, padding_value=config['PAD_token'])
 
         return { \
                 'context': batch_context, \
                 'text_indices': torch.tensor(batch_text_indices), \
                 # 'svo': torch.tensor(batch_svo), \
                 # 'nonsvo': torch.tensor(batch_nonsvo)
-                'max_len': max_len, \
             }
 
     def __iter__(self):

@@ -52,8 +52,15 @@ pad_token = config['PAD_token']
 
 print("num_words: {}\n" .format(num_words))
 
+text_train = absa_dataset.text_train
 text_test = absa_dataset.text_test
 text_val = absa_dataset.text_val
+
+# glob_max_len = len(max(max(text_train), max(text_test), max(text_val)))
+glob_max_len = absa_dataset.max_len
+glob_max_len += 2
+
+# print("global max sentence len: {}\n" .format(glob_max_len))
 
 train_data_loader = BucketIterator(data=absa_dataset.train_data, batch_size=config['batch_size'], shuffle=False)
 val_data_loader = BucketIterator(data=absa_dataset.val_data, batch_size=config['batch_size'], shuffle=False)
@@ -69,7 +76,7 @@ print("loader lens: {} {} {}\n" .format(test_data_loader.batch_len, len(split1_l
 class Logger(object):
     def __init__(self):
         self.terminal = sys.stdout
-        self.log = open(config['logs_path_split'], "a")
+        self.log = open(config['logs_path_multi'], "a")
 
     def write(self, message):
         self.terminal.write(message)
@@ -257,6 +264,9 @@ def evaluate(encoder, decoder, gcn, input_tensor, target_tensor):
 
         gcn_output = gcn(encoder, input_tensor)
 
+        if not gcn_output:
+            return []
+
         target_length = target_tensor.size(1)
 
         decoder_hidden = None
@@ -305,19 +315,19 @@ def multi_split(encoder, decoder, gcn, split1_loader, split2_loader, split1_text
 
     for batch1, batch2 in zip(split1_loader, split2_loader):
 
-        print(len(batch1['text_indices'][0]), len(batch2['text_indices'][0]))
-        if len(batch1['text_indices'][0]) != len(batch2['text_indices'][0]):
-            continue
+        # print(len(batch1['text_indices'][0]), len(batch2['text_indices'][0]))
+        # if len(batch1['text_indices'][0]) != len(batch2['text_indices'][0]):
+        #     continue
 
         svo1 = process_svo(batch1['context'])
         nonsvo2 = process_nonsvo(batch2['context'])
-        svo1 = BucketIterator.pad_graph(svo1, batch1['max_len'])
-        nonsvo2 = BucketIterator.pad_graph(nonsvo2, batch2['max_len'])
+        svo1 = BucketIterator.pad_graph(svo1, glob_max_len)
+        nonsvo2 = BucketIterator.pad_graph(nonsvo2, glob_max_len)
 
         svo2 = process_svo(batch2['context'])
         nonsvo1 = process_nonsvo(batch1['context'])
-        svo2 = BucketIterator.pad_graph(svo2, batch2['max_len'])
-        nonsvo1 = BucketIterator.pad_graph(nonsvo1, batch1['max_len'])
+        svo2 = BucketIterator.pad_graph(svo2, glob_max_len)
+        nonsvo1 = BucketIterator.pad_graph(nonsvo1, glob_max_len)
 
         input_tensor1 = [batch1['text_indices'].to(device), batch2['text_indices'].to(device), svo1.to(device), nonsvo2.to(device)]
         target_tensor1 = batch1['text_indices'].to(device)
@@ -339,6 +349,7 @@ def multi_split(encoder, decoder, gcn, split1_loader, split2_loader, split1_text
     print("candidate 1 size: {}\n" .format(len(candidate1)))
     print("candidate 2 size: {}\n" .format(len(candidate2)))
 
+    print("SVO 1 NONSVO 2\n")
     choice_indices = np.random.choice(len(candidate1), 10, replace=False)
     x = [candidate1[i] for i in choice_indices]
     y = [split1_text[i] for i in choice_indices]
@@ -346,6 +357,7 @@ def multi_split(encoder, decoder, gcn, split1_loader, split2_loader, split1_text
     for i, j, k in zip(x, y, z):
         print("Prediction: {}\nset1 Truth: {}\nset2 Truth: {}\n\n" .format(i, j, k))
 
+    print("SVO 2 NONSVO 1\n")
     choice_indices = np.random.choice(len(candidate2), 10, replace=False)
     x = [candidate2[i] for i in choice_indices]
     y = [split1_text[i] for i in choice_indices]
@@ -374,8 +386,8 @@ def evaluateTest(encoder, decoder, gcn, test_data_loader, val_data_loader, epoch
     for batch in data_loader:
         svo = process_svo(batch['context'])
         nonsvo = process_nonsvo(batch['context'])
-        svo = BucketIterator.pad_graph(svo, batch['max_len'])
-        nonsvo = BucketIterator.pad_graph(nonsvo, batch['max_len'])
+        svo = BucketIterator.pad_graph(svo, glob_max_len)
+        nonsvo = BucketIterator.pad_graph(nonsvo, glob_max_len)
         input_tensor = [batch['text_indices'].to(device), svo.to(device), nonsvo.to(device)]
         target_tensor = batch['text_indices'].to(device)
 
@@ -416,13 +428,15 @@ def trainIters(encoder, decoder, gcn, encoder_optimizer, decoder_optimizer, gcn_
             svo = process_svo(batch['context'])
             nonsvo = process_nonsvo(batch['context'])
 
-            svo = BucketIterator.pad_graph(svo, batch['max_len'])
-            nonsvo = BucketIterator.pad_graph(nonsvo, batch['max_len'])
+            svo = BucketIterator.pad_graph(svo, glob_max_len)
+            nonsvo = BucketIterator.pad_graph(nonsvo, glob_max_len)
             input_tensor = [batch['text_indices'].to(device), svo.to(device), nonsvo.to(device)]
             target_tensor = batch['text_indices'].to(device)
 
             # for item in batch['text_indices']:
             #     print(item)
+
+            # print("Split mode\n")
 
             loss = train(input_tensor, target_tensor, encoder, decoder, gcn, encoder_optimizer, decoder_optimizer, gcn_optimizer, criterion)
 

@@ -84,7 +84,7 @@ class INTERGCN(nn.Module):
 
     def forward(self, encoder, inputs):
         if len(inputs) == 3:
-            print("Split mode\n")
+            # print("Split mode\n")
             text_indices, svo, nonsvo = inputs
 
             text_len = torch.sum(text_indices != 0, dim=-1)
@@ -95,14 +95,15 @@ class INTERGCN(nn.Module):
             # print("pre e: {}\n" .format(text.shape))
             text_out, enc_hidden = encoder(text, text_len)
 
-             # feed hidden
+            # feed hidden
+            # print("text size: {}\n svo size: {}\n" .format(text_out.size(), svo.size()))
             x1 = F.relu(self.gc1(text_out, svo))
             x2 = F.relu(self.gc2(text_out, nonsvo))
             # print("x1 size: {} x2 size: {}\n" .format(x1.size(), x2.size()))
 
 
         elif len(inputs) == 4:
-            print("Multi Split mode\n")
+            # print("Multi Split mode\n")
             text_indices1, text_indices2, svo, nonsvo = inputs
 
             text_len1 = torch.sum(text_indices1 != 0, dim=-1)
@@ -118,6 +119,11 @@ class INTERGCN(nn.Module):
             text_out1, enc_hidden1 = encoder(text1, text_len1)
             text_out2, enc_hidden2 = encoder(text2, text_len2)
 
+            if text1.size(0) != text2.size(0):
+                print("text1: {} text2: {} svo: {} nonsvo: {}\n". format(text1.size(), text2.size(), svo.size(), nonsvo.size()))
+                return []
+                
+
             x1 = F.relu(self.gc1(text_out1, svo))
             x2 = F.relu(self.gc2(text_out2, nonsvo))
             # print("x1 size: {} x2 size: {}\n" .format(x1.size(), x2.size()))
@@ -129,7 +135,7 @@ class INTERGCN(nn.Module):
         # print("x1: {} size: {}\n" .format(x, x.size()))
 
     
-        print("x1 size: {} x2 size: {}\n" .format(x1.size(), x2.size()))
+        # print("x1 size: {} x2 size: {}\n" .format(x1.size(), x2.size()))
         x = torch.cat((x1, x2), 2)
         # print("x size: {}\n" .format(x.size()))
 
@@ -139,7 +145,7 @@ class INTERGCN(nn.Module):
         comp = torch.matmul(x_t, intermed)
         comp = comp.transpose(1, 2)
 
-        print("comp size: {}\n" .format(comp.size()))
+        # print("comp size: {}\n" .format(comp.size()))
 
         return comp
 
