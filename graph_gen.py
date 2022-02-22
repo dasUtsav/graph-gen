@@ -8,6 +8,8 @@ import numpy as np
 import os
 import pickle
 import sys
+import time
+import math
 
 from numpy.core.defchararray import replace
 
@@ -76,12 +78,12 @@ print("SOS token: {} EOS: {}\n" .format(SOS_token, EOS_token))
 print("num_words: {}\n" .format(num_words))
 
 text_test = absa_dataset.text_test
-text_val = absa_dataset.text_val
+# text_val = absa_dataset.text_val
         
-train_data_loader = BucketIterator(data=absa_dataset.train_data, batch_size=batch_size, shuffle=False)
+# train_data_loader = BucketIterator(data=absa_dataset.train_data, batch_size=batch_size, shuffle=False)
 test_data_loader = BucketIterator(data=absa_dataset.test_data, batch_size=batch_size, shuffle=False)
-val_data_loader = BucketIterator(data=absa_dataset.val_data, batch_size=batch_size, shuffle=False)
-print("train set size: {} {}\n" .format(len(fname_train), len(absa_dataset.train_data)))
+# val_data_loader = BucketIterator(data=absa_dataset.val_data, batch_size=batch_size, shuffle=False)
+# print("train set size: {} {}\n" .format(len(fname_train), len(absa_dataset.train_data)))
 
 class Logger(object):
     def __init__(self):
@@ -154,6 +156,13 @@ class DecoderRNN(nn.Module):
         output = self.softmax(self.out(output))
         # print("d last output size: {}\n" .format(output.size()))
         return output, hidden
+
+def calc_time(start):
+    now = time.time()
+    end = now - start
+    mins = math.floor(end / 60)
+    end -= mins*60
+    return end, mins
 
 def get_pred_words(total_output):
 
@@ -434,38 +443,45 @@ def trainIters(encoder, decoder, encoder_optimizer, decoder_optimizer, train_dat
 # ******************************************************************************************************************
 # ******************************************************************************************************************
 
-encoder = EncoderRNN(embed_dim, hidden_size, num_layers, batch_size, dropout_rate).to(device)
-decoder = DecoderRNN(hidden_size, num_words).to(device)
-encoder_optimizer = optim.Adam(encoder.parameters(), lr=learning_rate)
-decoder_optimizer = optim.Adam(decoder.parameters(), lr=learning_rate)
-epoch = 0
+# encoder = EncoderRNN(embed_dim, hidden_size, num_layers, batch_size, dropout_rate).to(device)
+# decoder = DecoderRNN(hidden_size, num_words).to(device)
+# encoder_optimizer = optim.Adam(encoder.parameters(), lr=learning_rate)
+# decoder_optimizer = optim.Adam(decoder.parameters(), lr=learning_rate)
+# epoch = 0
 
-checkpoint = torch.load(model_path)
-encoder.load_state_dict(checkpoint['enc_model_state_dict'])
-decoder.load_state_dict(checkpoint['dec_model_state_dict'])
-encoder_optimizer.load_state_dict(checkpoint['enc_optimizer_state_dict'])
-decoder_optimizer.load_state_dict(checkpoint['dec_optimizer_state_dict'])
-epoch = checkpoint['epoch']
-prev_loss = checkpoint['loss']
+# checkpoint = torch.load(model_path)
+# encoder.load_state_dict(checkpoint['enc_model_state_dict'])
+# decoder.load_state_dict(checkpoint['dec_model_state_dict'])
+# encoder_optimizer.load_state_dict(checkpoint['enc_optimizer_state_dict'])
+# decoder_optimizer.load_state_dict(checkpoint['dec_optimizer_state_dict'])
+# epoch = checkpoint['epoch']
+# prev_loss = checkpoint['loss']
 
-print("prev loss: {}\n" .format(prev_loss))
-print("starting from epoch: {}\n" .format(epoch + 1))
+# print("prev loss: {}\n" .format(prev_loss))
+# print("starting from epoch: {}\n" .format(epoch + 1))
 
-encoder.train()
-decoder.train()
+# encoder.train()
+# decoder.train()
 
-trainIters(encoder, decoder, encoder_optimizer, decoder_optimizer, train_data_loader, current_epochs=epoch + 1, total_epochs=total_epochs)
+# trainIters(encoder, decoder, encoder_optimizer, decoder_optimizer, train_data_loader, current_epochs=epoch + 1, total_epochs=total_epochs)
 
 print("starting evaluation...\n")
 
-encoder.eval()
-decoder.eval()
+# encoder.eval()
+# decoder.eval()
 
 # bleu_1, bleu_2, bleu_3, bleu_4 = evaluateTest(encoder, decoder, test_data_loader)
 # print("bleu_1: {}, bleu_2: {}, bleu_3: {}, bleu_4: {}\n" .format(bleu_1, bleu_2, bleu_3, bleu_4))
 
-# with open(dataset+'_auto_candidate.pkl', 'rb') as f:
-#     candidate = pickle.load(f)
+with open(dataset+'_auto_candidate.pkl', 'rb') as f:
+    candidate = pickle.load(f)
+
+print(len(candidate), len(text_test))
+choice_indices = np.random.choice(len(candidate), 20, replace=False)
+x = [candidate[i+1] for i in choice_indices]
+y = [text_test[i] for i in choice_indices]
+for i, j in zip(x, y):
+    print("Prediction: {}\nGround Truth: {}\n\n" .format(i, j))
 
 # count = 0
 # for x, y in zip(candidate, text_test):

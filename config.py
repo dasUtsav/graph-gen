@@ -2,19 +2,22 @@ import torch
 
 config = {
 
+    # total sentences: 629,343
+
     # dataset parameters
     'dataset': 'snli',
     'train_split': 0.9,
+    # 'train_split': '1_instance'
     'test_split': 0.1,
 
     # hyperparameters
-    'learning_rate': 0.0001,
+    'learning_rate': 0.01,
     'dropout_rate': 0,
 
     # model parameters
-    'model_path': 'model_chkpt_split_snli_10.pkl', 
-    'total_epochs': 10,
-    'batch_size': 35,
+    'model_path': 'model_chkpt_split_snli_100.pkl', 
+    'total_epochs': 100,
+    'batch_size': 250,
     'batch_size_seq': 100,
     'enc_num_layers': 2,
     'dec_num_layers': 1,
@@ -28,6 +31,7 @@ config = {
     'validate_every': 5,
     'clip_threshold': 50,
     'input_cols': ['text_indices'],
+    'save_path': 'model_chkpt_78k_config_2',
     'split_input_cols': ['text_indices', 'svo', 'nonsvo'],
 
     # vocab parameters
@@ -44,7 +48,13 @@ config = {
     'logs_path_split': 'logs_split.txt',
     'logs_path_gcn': 'logs_gcn.txt',
     'logs_path_seq': 'logs_seq.txt',
-    'logs_path_multi': 'logs_multi.txt'
+    'logs_path_multi': 'logs_multi.txt',
+    'logs_path_svo': 'logs_path_svo.txt',
+    'logs_path_svo_100' : 'logs_path_svo_100.txt',
+    'logs_path_2_layer': 'logs_path_2_layer.txt',
+    'logs_path_config_1': 'logs_path_config_1.txt',
+    'logs_path_config_2': 'logs_path_config_2.txt',
+    'logs_path_config_2_78k': 'logs_path_config_2_78k.txt'
 
 
 }

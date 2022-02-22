@@ -18,18 +18,36 @@ import sys
 
 nlp = spacy.load("en_core_web_sm")
 
+
+class Logger(object):
+    def __init__(self):
+        self.terminal = sys.stdout
+        self.log = open("dep_matrix.txt", "w")
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)  
+
+    def flush(self):
+        #this flush method is needed for python 3 compatibility.
+        #this handles the flush command by doing nothing.
+        #you might want to specify some extra behavior here.
+        pass        
+
+sys.stdout = Logger()
+
 def gov_dep_matrix(sentence):
 
     # words = sentence.split()
-    # doc = nlp(sentence)
     doc = sentence
+    # doc = nlp(sentence)
     # print(len(doc), len(words))
 
     matrix = np.zeros((len(doc), len(doc))).astype('float32')
     
     for token in doc:
         if token.dep_ != 'punct':
-            # print("text: {}\npos: {}\nhead text: {}\nhead pos: {}\nchild: {}\n" .format(token.text, token.pos_, token.head.text, token.head.pos_,
+            # print("text: {}\npos: {}\nhead text: {}\nhead pos: {}\ndep: {}\nchild: {}\n" .format(token.text, token.pos_, token.head.text, token.head.pos_, token.dep_,
             # [child for child in token.children], token.head.i))
             matrix[token.i][token.head.i] = 1   
 
@@ -43,34 +61,87 @@ def gov_dep_matrix(sentence):
 def svo_matrix(sentence):
 
     doc = sentence
+    # doc = nlp(sentence)
 
     matrix = np.zeros((len(doc), len(doc))).astype('float32')
 
+    # print("\nconfig 1")
+
+    # for token in doc:
+    #     if token.dep_ != 'punct' and (token.dep_ == 'nsubj' or token.dep_ == 'dobj' or token.dep_ == 'ROOT'):
+    #         matrix[token.i][token.head.i] = 1
+    #         print("token: {}\n" .format(token))
+
+    # if token.children:
+    #     for child in token.children:
+    #         if child.dep_ != 'punct' and (child.dep_ == 'nsubj' or child.dep_ == 'dobj' or child.dep_ == 'ROOT'):
+    #             matrix[token.i][child.i] = 1
+    #             print("token: {}\nchild: {}\n" .format(token, child))
+
+    # print("\nconfig 2")
+
     for token in doc:
-        if token.dep_ != 'punct' or token.dep_ == 'nsubj' or token.dep_ == 'dobj':
-            matrix[token.i][token.head.i] = 1       
+        # if token.pos_ != 'PUNCT' and (token.pos_ == 'ADJ' or token.pos_ == 'NOUN' or token.pos_ == 'VERB' or token.pos_ == 'PROPN' or token.pos == 'PRON'):
+        if (token.pos_ != 'PUNCT' and (token.dep_ == 'nsubj' or token.dep_ == 'dobj' or token.dep_ == "ROOT")) or (token.pos_ == 'AUX' and token.head.pos_ == 'VERB'):
+            matrix[token.i][token.head.i] = 1
+            matrix[token.i][token.i] = 1
+            # print("token: {}\n" .format(token))
 
         if token.children:
-            for child in token.children:
-                if child.dep_ != 'punct' or token.dep_ == 'nsubj' or token.dep_ == 'dobj':
+            if (token.dep_ == 'nsubj' or token.dep_ == 'dobj') and token.head.pos_ == 'VERB':
+                for child in token.children:
                     matrix[token.i][child.i] = 1
+            for child in token.children:
+                if child.pos_ != 'PUNCT' and (child.dep_ == 'nsubj' or child.dep_ == 'dobj' or child.dep_ == 'ROOT'):
+                # if child.pos_ != 'PUNCT' and (token.pos_ == 'ADJ' or token.pos_ == 'NOUN' or token.pos_ == 'VERB' or token.pos_ == 'PROPN' or token.pos == 'PRON'):
+                    matrix[token.i][child.i] = 1
+                    # print("token: {}\nchild: {}\n" .format(token, child))
 
+    # print("***********")
+
+    # print(matrix)
     return matrix
 
 def nonsvo_matrix(sentence):
 
+    # print("\nnonsvo")
+
     doc = sentence
+    # doc = nlp(sentence)
 
     matrix = np.zeros((len(doc), len(doc))).astype('float32')
 
+    # print("\nconfig 1")
+
+    # for token in doc:
+    #     if token.dep_ != 'punct' and not (token.dep_ == 'nsubj' or token.dep_ == 'dobj' or token.dep_ == 'ROOT'):
+    #         matrix[token.i][token.head.i] = 1
+    #         print("token: {}\n" .format(token))
+
+    # if token.children:
+    #     for child in token.children:
+    #         if child.dep_ != 'punct' and not (child.dep_ == 'nsubj' or child.dep_ == 'dobj' or child.dep_ == 'ROOT'):
+    #             matrix[token.i][child.i] = 1
+    #             print("token: {}\nchild: {}\n" .format(token, child))
+
+    # print("\nconfig 2")
+
     for token in doc:
-        if token.dep_ != 'punct' or token.dep_ != 'nsubj' or token.dep_ != 'dobj':
-            matrix[token.i][token.head.i] = 1   
+        # if token.pos_ != 'PUNCT' and not (token.pos_ == 'ADJ' or token.pos_ == 'NOUN' or token.pos_ == 'VERB' or token.pos_ == 'PROPN' or token.pos == 'PRON'):
+        if (token.pos_ != 'PUNCT' and not (token.dep_ == 'nsubj' or token.dep_ == 'dobj' or token.dep_ == 'ROOT')) and not ((token.pos_ == 'AUX' and token.head.pos_ == 'VERB')):
+            matrix[token.i][token.head.i] = 1
+            matrix[token.i][token.i] = 1    
+            # print("token: {}\n" .format(token))
 
         if token.children:
             for child in token.children:
-                if child.dep_ != 'punct' or token.dep_ != 'nsubj' or token.dep_ != 'dobj':
+                # if child.pos_ != 'PUNCT' and not (token.pos_ == 'ADJ' or token.pos_ == 'NOUN' or token.pos_ == 'VERB' or token.pos_ == 'PROPN' or token.pos == 'PRON'):
+                if child.pos_ != 'PUNCT' and not (child.dep_ == 'nsubj' or child.dep_ == 'dobj' or child.dep_ == 'ROOT'):
                     matrix[token.i][child.i] = 1
+                    # print("token: {}\nchild: {}\n" .format(token, child))
+
+    # matrix = np.where((svo == 0), 1, 0)
+    # print(matrix)
 
     return matrix
 
@@ -157,10 +228,38 @@ if __name__ == '__main__':
     test3 = "thats the last public phone in this area"
     test4 = "a man with no apron is smoking a pipe."
     test5 = "a couple is walking in a building."
+    test6 = "The group is watching the news"
+    test7 = "The children are playing outside"
+    test8 = "the man is reading the bible in church"
+    test9 = "the two people are surfing"
+    test10 = "United canceled the morning flights to Houston"
 
-    gov_dep_matrix(test1)
+    test11 = "Some men are talking in front of some graffiti"
+    test12 = "A boy makes a peace sign at a protest"
 
-    sentences = [test1, test3]
+    test13 = "I prefer the morning flight through Denver"
+
+    test14 = "Men buying things from the market"
+
+    # gov_dep_matrix(test9)
+    # svo = svo_matrix(test9)
+    # nonsvo = nonsvo_matrix(test9)
+    # print(svo)
+    # print('*******')
+    # print(nonsvo)
+
+    # gov_dep_matrix(test14)
+    # svo = svo_matrix(test14)
+    # nonsvo = nonsvo_matrix(test14)
+    # print(svo)
+    # print('*******')
+    # print(nonsvo)
+    gov_dep_matrix(test9)
+    svo = svo_matrix(test9)
+    nonsvo = nonsvo_matrix(test9)
+    print(svo)
+    print('*******')
+    print(nonsvo)
 
     # process_snli(x_train, './snli_train_svo.graph')
     # process_snli(x_train, './snli_train_gov_dep.graph')

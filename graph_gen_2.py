@@ -60,6 +60,7 @@ enc_bidirectional = config['enc_bidirectional']
 clip_threshold = config['clip_threshold']
 train_split = config['train_split']
 test_split = config['test_split']
+save_path = config['save_path']
 
 fname_train, fname_val_test = train_test_split(snli_data, train_size = train_split, test_size=test_split, random_state=10)
 fname_val, fname_test = train_test_split(fname_val_test, test_size=0.5, random_state=10)
@@ -94,7 +95,7 @@ print("train set size: {} {}\n" .format(len(fname_train), len(absa_dataset.train
 class Logger(object):
     def __init__(self):
         self.terminal = sys.stdout
-        self.log = open(config['logs_path_gcn'], "a")
+        self.log = open(config['logs_path_gcn'], "w")
 
     def write(self, message):
         self.terminal.write(message)
@@ -404,7 +405,7 @@ def trainIters(encoder, decoder, gcn, encoder_optimizer, decoder_optimizer, gcn_
                 'dec_optimizer_state_dict': decoder_optimizer.state_dict(),
                 'gcn_optimizer_state_dict': gcn_optimizer.state_dict(),
                 'loss': loss_total / len(fname_train)
-            }, 'model_chkpt_comp_{}_{}.pkl' .format(dataset, epoch))
+            }, save_path + '_' +  str(epoch))
             print("Saving model at epoch: {}" .format(epoch))
 
         if epoch % validate_every == 0:
@@ -421,7 +422,7 @@ def trainIters(encoder, decoder, gcn, encoder_optimizer, decoder_optimizer, gcn_
 
             choice_indices = np.random.choice(len(candidate), 10, replace=False)
             x = [candidate[i] for i in choice_indices]
-            y = [text_test[i] for i in choice_indices]
+            y = [text_val[i] for i in choice_indices]
             for i, j in zip(x, y):
                 print("Prediction: {}\nGround Truth: {}\n\n" .format(i, j))
 

@@ -52,21 +52,27 @@ nlp = spacy.load("en_core_web_sm")
 
 def build_wordvec_matrix(word2idx, embed_dim, type):
     embedding_matrix_file_name = '{0}_{1}_embedding_matrix.pkl'.format(str(embed_dim), type)
-    print('loading word vectors ...')
-    embedding_matrix = np.zeros((len(word2idx), embed_dim))
-    embedding_matrix[1, :] = np.random.uniform(-1/np.sqrt(embed_dim), 1/np.sqrt(embed_dim), (1, embed_dim))
-    fname = 'snli_w2v'
-    snli_w2v = Word2Vec.load(fname)
-    word_vec = snli_w2v.wv
-    print('building embedding_matrix:', embedding_matrix_file_name)
-    for word, i in word2idx.items():
-        try:
-            vec = word_vec.get_vector(word, norm=True)
-        except:
-            continue
-        if vec is not None:
-            embedding_matrix[i] = vec
-    pickle.dump(embedding_matrix, open(embedding_matrix_file_name, 'wb'))
+
+    if os.path.exists(embedding_matrix_file_name):
+        print('loading embedding_matrix:', embedding_matrix_file_name)
+        embedding_matrix = pickle.load(open(embedding_matrix_file_name, 'rb'))
+
+    else:
+        print('loading word vectors ...')
+        embedding_matrix = np.zeros((len(word2idx), embed_dim))
+        embedding_matrix[1, :] = np.random.uniform(-1/np.sqrt(embed_dim), 1/np.sqrt(embed_dim), (1, embed_dim))
+        fname = 'snli_w2v'
+        snli_w2v = Word2Vec.load(fname)
+        word_vec = snli_w2v.wv
+        print('building embedding_matrix:', embedding_matrix_file_name)
+        for word, i in word2idx.items():
+            try:
+                vec = word_vec.get_vector(word, norm=True)
+            except:
+                continue
+            if vec is not None:
+                embedding_matrix[i] = vec
+        pickle.dump(embedding_matrix, open(embedding_matrix_file_name, 'wb'))
 
     return embedding_matrix
 
@@ -129,13 +135,24 @@ class ABSADataset(object):
 class ABSADatasetReader:
     @staticmethod
     def __read_text__(fnames):
-        text = ''
-        for fname in fnames:    
-            for line in fname:
-                line = line.lower().strip()
-                line = re.sub(r"([.!?])", r" \1", line)
-                line = re.sub(r"[^a-zA-Z.!?]+", r" ", line)
-                text += line + " "
+
+        if os.path.exists("raw_text_" + str(config['train_split'])):
+            with open("raw_text_" + str(config['train_split']), 'rb') as f:
+                text = pickle.load(f)
+            f.close()
+            with open("max_len_" + str(config['train_split']), 'rb') as f:
+                max_len = pickle.load(f)
+            f.close()
+
+        else:
+            text = ''
+            for fname in fnames:    
+                for line in fname:
+                    line = line.lower().strip()
+                    line = re.sub(r"([.!?])", r" \1", line)
+                    line = re.sub(r"[^a-zA-Z.!?]+", r" ", line)
+                    text += line + " "
+        
         return text
 
     @staticmethod
@@ -151,33 +168,46 @@ class ABSADatasetReader:
         # graph = pickle.load(fin)
         # fin.close()
 
-        # graph = {}
-        all_data = []
-        text_total = []
-        # graph_id = 0
-        for line in fname:
-            
-            line = line.lower().strip()
-            line = re.sub(r"([.!?])", r" \1", line)
-            line = re.sub(r"[^a-zA-Z.!?]+", r" ", line)
-            # line = line.split(' ')
-            line = nlp(line)
-            listified = [item.text for item in line]
-            text_total.append(listified)
+        if os.path.exists(flag + "_data_" + str(config['train_split'])) and flag == 'train':
+            print("Loading in from pickle\n")
+            with open(flag + "_data_" + str(config['train_split']), 'rb') as f:
+                all_data = pickle.load(f)
+            f.close()
+            with open(flag + "_total_" + str(config['train_split']), 'rb') as f:
+                text_total = pickle.load(f)
+            f.close()
+        
+        else:
+            # graph = {}
+            all_data = []
+            text_total = []
+            # graph_id = 0
+            for line in fname:
+                
+                line = line.lower().strip()
+                line = re.sub(r"([.!?])", r" \1", line)
+                line = re.sub(r"[^a-zA-Z.!?]+", r" ", line)
+                # line = line.split(' ')
+                line = nlp(line)
+                listified = [item.text for item in line]
+                text_total.append(listified)
 
-            text_indices = tokenizer.text_to_sequence(listified)
-            # dependency_graph = graph[graph_id]
+                text_indices = tokenizer.text_to_sequence(listified)
+                # dependency_graph = graph[graph_id]
 
-            data = {
-                'context': line,
-                'text_indices': text_indices,
-                # 'dependency_graph': dependency_graph,
-            }
+                data = {
+                    'context': line,
+                    'text_indices': text_indices,
+                    # 'dependency_graph': dependency_graph,
+                }
 
-            all_data.append(data)
-            # graph_id += 1
+                all_data.append(data)
+                # graph_id += 1
 
-        return all_data, text_total
+        if flag == 'val' or flag == 'test':
+            return all_data, text_total
+        else:
+            return all_data
 
     def __init__(self, dataset, train, val, test, split, embed_dim=300):
         print("preparing {0} dataset ...".format(dataset))
@@ -197,7 +227,7 @@ class ABSADatasetReader:
         #     pickle.dump(self.tokenizer.idx2word, f)
         # self.embedding_matrix = build_embedding_matrix(self.tokenizer.word2idx, embed_dim, dataset)
         self.embedding_matrix = build_wordvec_matrix(self.tokenizer.word2idx, embed_dim, dataset)
-        self.train_data, self.text_train = ABSADataset(ABSADatasetReader.__read_data__(train, self.tokenizer, split, flag = 'train'))
+        self.train_data = ABSADataset(ABSADatasetReader.__read_data__(train, self.tokenizer, split, flag = 'train'))
         self.val_data, self.text_val = ABSADataset(ABSADatasetReader.__read_data__(val, self.tokenizer, split, flag = 'val'))
         self.test_data, self.text_test = ABSADataset(ABSADatasetReader.__read_data__(test, self.tokenizer, split, flag = 'test'))
 

@@ -10,8 +10,9 @@ from scipy.sparse import compressed
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from config import config
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = config['device_split']
 
 class GraphConvolution(nn.Module):
     def __init__(self, in_features, out_features, bias=True):
@@ -45,6 +46,8 @@ class INTERGCN(nn.Module):
         self.embed = nn.Embedding.from_pretrained(torch.tensor(embedding_matrix, dtype=torch.float))
         self.gc1 = GraphConvolution(2*hidden_size, 2*hidden_size)
         self.gc2 = GraphConvolution(2*hidden_size, 2*hidden_size)
+        # self.gc3 = GraphConvolution(2*hidden_size, 2*hidden_size)
+        # self.gc4 = GraphConvolution(2*hidden_size, 2*hidden_size)
         self.text_embed_dropout = nn.Dropout(0.3)
         self.fc = nn.Linear(4*hidden_size, 1)
 
@@ -98,7 +101,9 @@ class INTERGCN(nn.Module):
             # feed hidden
             # print("text size: {}\n svo size: {}\n" .format(text_out.size(), svo.size()))
             x1 = F.relu(self.gc1(text_out, svo))
+            # x1 = F.relu(self.gc3(x1, svo))
             x2 = F.relu(self.gc2(text_out, nonsvo))
+            # x2 = F.relu(self.gc4(x2, nonsvo))
             # print("x1 size: {} x2 size: {}\n" .format(x1.size(), x2.size()))
 
 
@@ -119,13 +124,16 @@ class INTERGCN(nn.Module):
             text_out1, enc_hidden1 = encoder(text1, text_len1)
             text_out2, enc_hidden2 = encoder(text2, text_len2)
 
+            # drop last batch as sizes of split loader 1 and 2 are different
             if text1.size(0) != text2.size(0):
                 print("text1: {} text2: {} svo: {} nonsvo: {}\n". format(text1.size(), text2.size(), svo.size(), nonsvo.size()))
                 return []
                 
 
             x1 = F.relu(self.gc1(text_out1, svo))
+            # x1 = F.relu(self.gc3(x1, svo))
             x2 = F.relu(self.gc2(text_out2, nonsvo))
+            # x2 = F.relu(self.gc4(x2, nonsvo))
             # print("x1 size: {} x2 size: {}\n" .format(x1.size(), x2.size()))
 
        

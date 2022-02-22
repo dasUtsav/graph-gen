@@ -10,6 +10,10 @@ import pickle
 import time
 import math
 import sys
+import kenlm
+from nltk.tokenize.treebank import TreebankWordDetokenizer
+
+ken_model = kenlm.Model("./kenlm/build/snli_text.arpa")
 
 from intergcn_split import INTERGCN
 from data_utils_split import ABSADatasetReader
@@ -27,6 +31,9 @@ from config import config
 from generate_dep_matrix import process_snli, process_nonsvo, process_svo
 
 device = config['device_split']
+print("Device: {}\n" .format(device))
+
+torch.cuda.empty_cache()
 
 fname = './snli_sentences_all.txt'
 fin = open(fname, 'r')
@@ -34,6 +41,12 @@ snli_data = fin.readlines()
 
 fname_train, fname_val_test = train_test_split(snli_data, train_size=config['train_split'], test_size=config['test_split'], random_state=10)
 fname_val, fname_test = train_test_split(fname_val_test, test_size=0.5, random_state=10)
+
+print("train size: {}, val: {}, test: {}\n" .format(len(fname_train), len(fname_val), len(fname_test)))
+
+# fname_train = ["The man makes dinner", "The woman makes dinner"]
+# fname_val = ["The man makes dinner", "The woman makes dinner"]
+# fname_test = ["The man makes dinner", "The woman makes dinner", "The man makes fish", "The woman makes fish"]
 
 absa_dataset = ABSADatasetReader(config['dataset'], fname_train, fname_val, fname_test, config['train_split'], embed_dim=config['embed_dim'])
 
@@ -52,9 +65,11 @@ pad_token = config['PAD_token']
 
 print("num_words: {}\n" .format(num_words))
 
-text_train = absa_dataset.text_train
-text_test = absa_dataset.text_test
+# train text is not used, as reference is not required for training, only validation and test
+# text_train = absa_dataset.text_train
+
 text_val = absa_dataset.text_val
+text_test = absa_dataset.text_test
 
 # glob_max_len = len(max(max(text_train), max(text_test), max(text_val)))
 glob_max_len = absa_dataset.max_len
@@ -62,21 +77,46 @@ glob_max_len += 2
 
 # print("global max sentence len: {}\n" .format(glob_max_len))
 
-train_data_loader = BucketIterator(data=absa_dataset.train_data, batch_size=config['batch_size'], shuffle=False)
+# pickling batching not required
+# if os.path.exists("train_loader_" + str(config['train_split'])):
+#     print("Loading in batched data from pickle\n")
+#     with open("train_loader_" + str(config['train_split']), 'rb') as f:
+#         train_data_loader = pickle.load(f)
+#     f.close()
+#     with open("val_loader_" + str(config['train_split']), 'rb') as f:
+#         val_data_loader = pickle.load(f)
+#     f.close()
+#     with open("test_loader_" + str(config['train_split']), 'rb') as f:
+#         test_data_loader = pickle.load(f)
+#     f.close()
+
+# else:
+# train_data_loader = BucketIterator(data=absa_dataset.train_data, batch_size=config['batch_size'], shuffle=False)
 val_data_loader = BucketIterator(data=absa_dataset.val_data, batch_size=config['batch_size'], shuffle=False)
 test_data_loader = BucketIterator(data=absa_dataset.test_data, batch_size=config['batch_size'], shuffle=False)
+
+# pickling batching not required
+# with open("train_loader_" + str(config['train_split']), "wb") as f:
+#     pickle.dump(train_data_loader, f)
+# f.close()
+# with open("val_loader_" + str(config['train_split']), "wb") as f:
+#     pickle.dump(val_data_loader, f)
+# f.close()
+# with open("test_loader_" + str(config['train_split']), "wb") as f:
+#     pickle.dump(test_data_loader, f)
+# f.close()
 
 split1_loader = test_data_loader.batches[:test_data_loader.batch_len//2]
 split1_text = text_test[:(len(split1_loader)*config['batch_size'])]
 split2_loader = test_data_loader.batches[test_data_loader.batch_len//2:]
 split2_text = text_test[(len(split2_loader)*config['batch_size']):]
 
-print("loader lens: {} {} {}\n" .format(test_data_loader.batch_len, len(split1_loader), len(split2_loader)))
+print("split loader lens: {} {} {}\n" .format(test_data_loader.batch_len, len(split1_loader), len(split2_loader)))
 
 class Logger(object):
     def __init__(self):
         self.terminal = sys.stdout
-        self.log = open(config['logs_path_multi'], "a")
+        self.log = open(config['logs_path_config_2'], "a")
 
     def write(self, message):
         self.terminal.write(message)
@@ -169,7 +209,7 @@ def get_pred_words(total_output):
 
     return decoded_words
 
-def calc_bleu(candidate, reference):
+def calc_bleu(candidate, reference, flag = 'regular'):
 
     new = []
     for x in candidate:
@@ -183,11 +223,38 @@ def calc_bleu(candidate, reference):
     # print("candidate: ", new)
 
     bleu_1 = bleu_score(new, reference, weights=[1, 0, 0, 0])
-    bleu_2 = bleu_score(new, reference, weights=[0.5, 0.5, 0, 0])
-    bleu_3 = bleu_score(new, reference, weights=[0.34, 0.33, 0.33, 0])
-    bleu_4 = bleu_score(new, reference, weights=[0.25, 0.25, 0.25, 0.25])
+
+    if flag == 'split':
+        return bleu_1
+    else:
+        bleu_2 = bleu_score(new, reference, weights=[0.5, 0.5, 0, 0])
+        bleu_3 = bleu_score(new, reference, weights=[0.34, 0.33, 0.33, 0])
+        bleu_4 = bleu_score(new, reference, weights=[0.25, 0.25, 0.25, 0.25])
 
     return bleu_1, bleu_2, bleu_3, bleu_4
+
+def calc_ppl(candidate, ken_model):
+
+    ppl = 0
+
+    new = []
+    for x in candidate:
+        temp = []
+        for word in x:
+            if word == 'EOS':
+                break
+            temp.append(word)
+        new.append(temp)
+
+    avg_len = len(new)
+
+    for x in new:
+        x = TreebankWordDetokenizer().detokenize(x)
+        ppl += ken_model.perplexity(x)
+
+    ppl = ppl / avg_len
+
+    return ppl
 
 def train(input_tensor, target_tensor, encoder, decoder, gcn, encoder_optimizer, decoder_optimizer, gcn_optimizer, criterion):
 
@@ -196,6 +263,7 @@ def train(input_tensor, target_tensor, encoder, decoder, gcn, encoder_optimizer,
     gcn_optimizer.zero_grad()
 
     loss = 0
+    
 
     gcn_output = gcn(encoder, input_tensor)
     # gcn_output = torch.zeros((target_tensor.size(0), 1, 2*hidden_size), device=device)
@@ -236,9 +304,12 @@ def train(input_tensor, target_tensor, encoder, decoder, gcn, encoder_optimizer,
         tg_embed = tg_embed.unsqueeze(dim=1)
         # print("tg embed {} size {} " .format(tg_embed, tg_embed.size()))
 
-        decoder_output, decoder_hidden = decoder(decoder_input, decoder_hidden)
-        decoder_output = decoder_output.squeeze(dim=1)
-        # print("dec op size", decoder_output, decoder_output.size())
+        try:
+            decoder_output, decoder_hidden = decoder(decoder_input, decoder_hidden)
+        except:
+            print("gcn_output: {} size: {}\n" .format(gcn_output, gcn_output.size()))
+            print("dec op size", decoder_output, decoder_output.size())
+        decoder_output = decoder_output.squeeze(dim=1)        
 
         loss += criterion(decoder_output, tg)
 
@@ -263,8 +334,10 @@ def evaluate(encoder, decoder, gcn, input_tensor, target_tensor):
         # total_output = torch.unsqueeze(total_output, dim = 1)
 
         gcn_output = gcn(encoder, input_tensor)
+        # print(gcn_output, gcn_output.size())
 
-        if not gcn_output:
+        # in case its last batch with different sizes
+        if isinstance(gcn_output, list):
             return []
 
         target_length = target_tensor.size(1)
@@ -285,7 +358,12 @@ def evaluate(encoder, decoder, gcn, input_tensor, target_tensor):
                 decoder_input = embed(decoder_input)
             
             # print("dec ip size: {} dec ip: {}" .format(decoder_input.size(), decoder_input))
-            decoder_input = torch.cat((decoder_input, gcn_output), dim=2)
+            try:
+                decoder_input = torch.cat((decoder_input, gcn_output), dim=2)
+            except:
+                print(gcn_output, gcn_output.size())
+                print("dec ip size: {} dec ip: {}" .format(decoder_input.size(), decoder_input))
+
 
             decoder_output, decoder_hidden = decoder(decoder_input, decoder_hidden)
             # print("dec op size: {} dec op: {}" .format(decoder_output.size(), decoder_output))
@@ -310,6 +388,16 @@ def multi_split(encoder, decoder, gcn, split1_loader, split2_loader, split1_text
 
     candidate1 = []
     candidate2 = []
+    reference1 = []
+    reference2 = []
+
+    for item in split1_text:
+        reference1.append([item])
+    for item in split2_text:
+        reference2.append([item])
+
+    print("reference 1 size: {}\n" .format(len(reference1)))
+    print("reference 2 size: {}\n" .format(len(reference2)))
     
     print("Calculating candidate...\n")
 
@@ -346,11 +434,35 @@ def multi_split(encoder, decoder, gcn, split1_loader, split2_loader, split1_text
     candidate1 = [val for sublist in candidate1 for val in sublist]
     candidate2 = [val for sublist in candidate2 for val in sublist]
 
+    ppl_1 = calc_ppl(candidate1, ken_model)
+    ppl_2 = calc_ppl(candidate2, ken_model)
+
+    print("ppl 1: {}, ppl: 2: {}\n" .format(ppl_1, ppl_2))
+
+    # add ppl calc here
+
     print("candidate 1 size: {}\n" .format(len(candidate1)))
     print("candidate 2 size: {}\n" .format(len(candidate2)))
 
+    # remove last batch to make candidate and reference same
+    drop_last = len(reference2) - len(candidate2)
+    reference1 = reference1[:len(reference1) - config['batch_size']]
+    # size of last batch of split_2 text
+    reference2 = reference2[:len(reference2) - drop_last]
+
+    print("reference 1 size: {}\n" .format(len(reference1)))
+    print("reference 2 size: {}\n" .format(len(reference2)))
+
+    svo_1 = calc_bleu(candidate1, reference1, flag = 'split')
+    nonsvo_1 = calc_bleu(candidate2, reference1, flag = 'split')
+    svo_2 = calc_bleu(candidate2, reference2, flag = 'split')
+    nonsvo_2 = calc_bleu(candidate1, reference2, flag = 'split')
+
+    print("bleu scores, svo1: {}, nonsvo1: {}, svo2: {}, nonsvo2: {}\n" .format(svo_1, nonsvo_1, svo_2, nonsvo_2))
+
     print("SVO 1 NONSVO 2\n")
-    choice_indices = np.random.choice(len(candidate1), 10, replace=False)
+    # print(candidate1)
+    choice_indices = np.random.choice(len(candidate1), 50, replace=False)
     x = [candidate1[i] for i in choice_indices]
     y = [split1_text[i] for i in choice_indices]
     z = [split2_text[i] for i in choice_indices]
@@ -358,7 +470,8 @@ def multi_split(encoder, decoder, gcn, split1_loader, split2_loader, split1_text
         print("Prediction: {}\nset1 Truth: {}\nset2 Truth: {}\n\n" .format(i, j, k))
 
     print("SVO 2 NONSVO 1\n")
-    choice_indices = np.random.choice(len(candidate2), 10, replace=False)
+    # print(candidate2)
+    choice_indices = np.random.choice(len(candidate2), 50, replace=False)
     x = [candidate2[i] for i in choice_indices]
     y = [split1_text[i] for i in choice_indices]
     z = [split2_text[i] for i in choice_indices]
@@ -369,10 +482,11 @@ def evaluateTest(encoder, decoder, gcn, test_data_loader, val_data_loader, epoch
 
     candidate = []
     reference = []
+    ppl_total = 0
     
     print("Calculating candidate...\n")
 
-    if epoch == total_epochs + 1:
+    if epoch == total_epochs:
         print("Using test loader\n")
         data_loader = test_data_loader
         for item in text_test:
@@ -397,6 +511,10 @@ def evaluateTest(encoder, decoder, gcn, test_data_loader, val_data_loader, epoch
 
     candidate = [val for sublist in candidate for val in sublist]
 
+    ppl = calc_ppl(candidate, ken_model)
+
+    print("perplexity: {}\n" .format(ppl))
+
     with open(config['dataset'] + '_gcn_candidate.pkl', 'wb') as file:
         pickle.dump(candidate, file)
         print("pickled candidate corpus!!!!")
@@ -407,6 +525,15 @@ def evaluateTest(encoder, decoder, gcn, test_data_loader, val_data_loader, epoch
     # print("candidate: {}\n" .format(candidate))
     # print("\n*******\nreference: {}\n" .format(reference_corpus))
     bleu_1, bleu_2, bleu_3, bleu_4 = calc_bleu(candidate, reference)
+
+    if epoch == total_epochs:
+        print("bleu_1: {}, bleu_2: {}, bleu_3: {}, bleu_4: {}\n" .format(bleu_1, bleu_2, bleu_3, bleu_4))
+        
+        choice_indices = np.random.choice(len(candidate), 10, replace=False)
+        x = [candidate[i] for i in choice_indices]
+        y = [text_test[i] for i in choice_indices]
+        for i, j in zip(x, y):
+            print("Prediction: {}\nGround Truth: {}\n\n" .format(i, j))
 
     return bleu_1, bleu_2, bleu_3, bleu_4
 
@@ -451,8 +578,8 @@ def trainIters(encoder, decoder, gcn, encoder_optimizer, decoder_optimizer, gcn_
                 'enc_optimizer_state_dict': encoder_optimizer.state_dict(),
                 'dec_optimizer_state_dict': decoder_optimizer.state_dict(),
                 'gcn_optimizer_state_dict': gcn_optimizer.state_dict(),
-                'loss': loss_total / len(fname_train)
-            }, 'model_chkpt_split_{}_{}.pkl' .format(config['dataset'], epoch))
+                'loss': loss_total / len(fname_train),
+            }, config['save_path'] + '_' + str(epoch))
             print("Saving model at epoch: {}" .format(epoch))
 
         if epoch % config['validate_every'] == 0:
@@ -469,7 +596,7 @@ def trainIters(encoder, decoder, gcn, encoder_optimizer, decoder_optimizer, gcn_
 
             choice_indices = np.random.choice(len(candidate), 10, replace=False)
             x = [candidate[i] for i in choice_indices]
-            y = [text_test[i] for i in choice_indices]
+            y = [text_val[i] for i in choice_indices]
             for i, j in zip(x, y):
                 print("Prediction: {}\nGround Truth: {}\n\n" .format(i, j))
 
@@ -490,12 +617,22 @@ encoder = EncoderRNN(config['embed_dim'], config['hidden_size'], config['batch_s
 gcn = INTERGCN(absa_dataset.embedding_matrix, config['hidden_size']).to(device)
 decoder = DecoderRNN(config['hidden_size'], num_words).to(device)
 # l2 loss
+encoder_params = sum(p.numel() for p in encoder.parameters())
+gcn_params = sum(p.numel() for p in gcn.parameters())
+decoder_params = sum(p.numel() for p in decoder.parameters())
+
+encoder_trainable_params = sum(p.numel() for p in encoder.parameters() if p.requires_grad)
+gcn_trainable_params = sum(p.numel() for p in gcn.parameters() if p.requires_grad)
+decoder_trainable_params = sum(p.numel() for p in decoder.parameters() if p.requires_grad)
+
+print("Params: {} {} {} {} {} {}" .format(encoder_params, gcn_params, decoder_params, encoder_trainable_params, gcn_params, decoder_params))
+
 encoder_optimizer = optim.Adam(encoder.parameters(), lr=config['learning_rate'])
 decoder_optimizer = optim.Adam(decoder.parameters(), lr=config['learning_rate'])
 gcn_optimizer = optim.Adam(gcn.parameters(), lr=config['learning_rate'])
 epoch = 0
 
-checkpoint = torch.load(config['model_path'])
+checkpoint = torch.load(config['model_path'], map_location=config['device_split'])
 encoder.load_state_dict(checkpoint['enc_model_state_dict'])
 decoder.load_state_dict(checkpoint['dec_model_state_dict'])
 gcn.load_state_dict(checkpoint['gcn_model_state_dict'])
@@ -533,5 +670,8 @@ print("word2idx: {}\n" .format(word2idx['a']))
 #     if count == 10:
 #         break
 #     count += 1
+epoch = 100
+
+evaluateTest(encoder, decoder, gcn, test_data_loader, val_data_loader, epoch, config['total_epochs'])
 
 multi_split(encoder, decoder, gcn, split1_loader, split2_loader, split1_text, split2_text)
