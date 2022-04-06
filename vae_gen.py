@@ -1,12 +1,19 @@
 from __future__ import unicode_literals, print_function, division
 from io import open
-
+import unicodedata
+import string
+import re
+import random
 import numpy as np
+import os
 import pickle
 import time
+import math
 import sys
+from paddlenlp.metrics import Distinct
 
 import kenlm
+from nltk.tokenize.treebank import TreebankWordDetokenizer
 
 ken_model = kenlm.Model("./kenlm/build/snli_text.arpa")
 
@@ -17,7 +24,7 @@ from config import config
 from generate_dep_matrix import process_snli, process_nonsvo, process_svo
 from vae import VAE
 from enc_dec import EncoderRNN, DecoderRNN
-from utils import Logger, calc_time, calc_bleu, calc_ppl, calc_distinct, get_pred_words
+from utils import Logger, calc_time, calc_bleu, calc_ppl, calc_distinct
 
 import torch
 import torch.nn as nn
@@ -31,20 +38,25 @@ from torch.utils.tensorboard import SummaryWriter
 
 # TODO: add entropy, tree distance edit
 
-def train(input_tensor, target_tensor, encoder, decoder, gcn, vae, encoder_optimizer, decoder_optimizer, gcn_optimizer, vae_optimizer, criterion):
+def train(input_tensor, target_tensor, encoder, decoder, vae, encoder_optimizer, decoder_optimizer, vae_optimizer, criterion):
 
     encoder_optimizer.zero_grad()
     decoder_optimizer.zero_grad()
-    gcn_optimizer.zero_grad()
     vae_optimizer.zero_grad()
 
     loss = 0
 
-    gcn_output = gcn(encoder, input_tensor)
-    # gcn_output = torch.zeros((target_tensor.size(0), 1, 2*hidden_size), device=device)
-    # print("gcn_output: {} size: {}\n" .format(gcn_output, gcn_output.size()))
+    text_indices, svo, non_svo = input_tensor
 
-    z, kld = vae(gcn_output)
+    text_len = torch.sum(text_indices != 0, dim=-1)
+    text_len = text_len.to('cpu')
+    # aspect_double_idx = torch.cat([left_len.unsqueeze(1), (left_len+aspect_len-1).unsqueeze(1)], dim=1)
+    text = embed(text_indices)
+    text = embed_dropout(text)
+
+    text_out, enc_hidden = encoder(text, text_len)
+
+    z, kld = vae(enc_hidden)
 
     target_embed = embed(target_tensor)
 
@@ -83,11 +95,8 @@ def train(input_tensor, target_tensor, encoder, decoder, gcn, vae, encoder_optim
         tg_embed = tg_embed.unsqueeze(dim=1)
         # print("tg embed {} size {} " .format(tg_embed, tg_embed.size()))
 
-        try:
-            decoder_output, decoder_hidden = decoder(decoder_input, decoder_hidden)
-        except:
-            print("gcn_output: {} size: {}\n" .format(gcn_output, gcn_output.size()))
-            print("dec op size", decoder_output, decoder_output.size())
+        decoder_output, decoder_hidden = decoder(decoder_input, decoder_hidden)
+
         decoder_output = decoder_output.squeeze(dim=1)        
 
         loss += criterion(decoder_output, tg)
@@ -104,7 +113,6 @@ def train(input_tensor, target_tensor, encoder, decoder, gcn, vae, encoder_optim
     # nn.utils.clip_grad_norm(vae.parameters(), config['clip_threshold'])
     encoder_optimizer.step()
     decoder_optimizer.step()
-    gcn_optimizer.step()
     vae_optimizer.step()
 
     return loss.item(), kld
@@ -237,11 +245,11 @@ def multi_split(encoder, decoder, gcn, vae, split1_loader, split2_loader, split1
         target_tensor2 = batch2['text_indices'].to(device)
 
         total_output = evaluate(encoder, decoder, gcn, vae, input_tensor1, target_tensor1, config['sample_mode'])
-        output_sentences = get_pred_words(total_output, idx2word)
+        output_sentences = get_pred_words(total_output)
         candidate1.append(output_sentences)
 
         total_output = evaluate(encoder, decoder, gcn, vae, input_tensor2, target_tensor2, config['sample_mode'])
-        output_sentences = get_pred_words(total_output, idx2word)
+        output_sentences = get_pred_words(total_output)
         candidate2.append(output_sentences)
 
     candidate1 = [val for sublist in candidate1 for val in sublist]
@@ -323,7 +331,7 @@ def evaluateTest(encoder, decoder, gcn, vae, test_data_loader, val_data_loader, 
         target_tensor = batch['text_indices'].to(device)
 
         total_output = evaluate(encoder, decoder, gcn, vae, input_tensor, target_tensor)
-        output_sentences = get_pred_words(total_output, idx2word)
+        output_sentences = get_pred_words(total_output)
         candidate.append(output_sentences)
 
     candidate = [val for sublist in candidate for val in sublist]
@@ -439,9 +447,10 @@ def trainIters(encoder, decoder, gcn, vae, encoder_optimizer, decoder_optimizer,
 # **************************************************************************************************************
 # **************************************************************************************************************
 
-
 device = config['device_split']
 print("Device: {}\n" .format(device))
+
+torch.cuda.empty_cache()
 
 # Writer will output to ./runs/ directory by default
 writer = SummaryWriter()
@@ -454,6 +463,10 @@ fname_train, fname_val_test = train_test_split(snli_data, train_size=config['tra
 fname_val, fname_test = train_test_split(fname_val_test, test_size=0.5, random_state=10)
 
 print("train size: {}, val: {}, test: {}\n" .format(len(fname_train), len(fname_val), len(fname_test)))
+
+# fname_train = ["The man makes dinner", "The woman makes dinner"]
+# fname_val = ["The man makes dinner", "The woman makes dinner"]
+# fname_test = ["The man makes dinner", "The woman makes dinner", "The man makes fish", "The woman makes fish"]
 
 dataset = DatasetReader(config['dataset'], fname_train, fname_val, fname_test, config['train_split'], embed_dim=config['embed_dim'])
 
@@ -484,9 +497,34 @@ glob_max_len += 2
 
 # print("global max sentence len: {}\n" .format(glob_max_len))
 
+# pickling batching not required
+# if os.path.exists("train_loader_" + str(config['train_split'])):
+#     print("Loading in batched data from pickle\n")
+#     with open("train_loader_" + str(config['train_split']), 'rb') as f:
+#         train_data_loader = pickle.load(f)
+#     f.close()
+#     with open("val_loader_" + str(config['train_split']), 'rb') as f:
+#         val_data_loader = pickle.load(f)
+#     f.close()
+#     with open("test_loader_" + str(config['train_split']), 'rb') as f:
+#         test_data_loader = pickle.load(f)
+#     f.close()
+
+# else:
 train_data_loader = BucketIterator(data=dataset.train_data, batch_size=config['batch_size'], shuffle=False)
 val_data_loader = BucketIterator(data=dataset.val_data, batch_size=config['batch_size'], shuffle=False)
 test_data_loader = BucketIterator(data=dataset.test_data, batch_size=config['batch_size'], shuffle=False)
+
+# pickling batching not required
+# with open("train_loader_" + str(config['train_split']), "wb") as f:
+#     pickle.dump(train_data_loader, f)
+# f.close()
+# with open("val_loader_" + str(config['train_split']), "wb") as f:
+#     pickle.dump(val_data_loader, f)
+# f.close()
+# with open("test_loader_" + str(config['train_split']), "wb") as f:
+#     pickle.dump(test_data_loader, f)
+# f.close()
 
 split1_loader = test_data_loader.batches[:test_data_loader.batch_len//2]
 split1_text = text_test[:(len(split1_loader)*config['batch_size'])]
@@ -498,52 +536,44 @@ print("split loader lens: {} {} {}\n" .format(test_data_loader.batch_len, len(sp
 sys.stdout = Logger()
 
 encoder = EncoderRNN(config['embed_dim'], config['hidden_size'], config['batch_size'], config['enc_num_layers'], dataset.embedding_matrix).to(device)
-gcn = INTERGCN(dataset.embedding_matrix, config['hidden_size']).to(device)
 decoder = DecoderRNN(config['vae_latent_dim'], num_words, dataset.embedding_matrix).to(device)
 vae = VAE().to(device)
 # l2 loss
 encoder_params = sum(p.numel() for p in encoder.parameters())
-gcn_params = sum(p.numel() for p in gcn.parameters())
 decoder_params = sum(p.numel() for p in decoder.parameters())
 
 encoder_trainable_params = sum(p.numel() for p in encoder.parameters() if p.requires_grad)
-gcn_trainable_params = sum(p.numel() for p in gcn.parameters() if p.requires_grad)
 decoder_trainable_params = sum(p.numel() for p in decoder.parameters() if p.requires_grad)
 
-print("Params: {} {} {} {} {} {}" .format(encoder_params, gcn_params, decoder_params, encoder_trainable_params, gcn_params, decoder_params))
+print("Params: {} {} {} {}" .format(encoder_params, decoder_params, encoder_trainable_params, decoder_params))
 
 encoder_optimizer = optim.Adam(encoder.parameters(), lr=config['learning_rate'])
 decoder_optimizer = optim.Adam(decoder.parameters(), lr=config['learning_rate'])
-gcn_optimizer = optim.Adam(gcn.parameters(), lr=config['learning_rate'])
 vae_optimizer = optim.Adam(vae.parameters(), lr = config['learning_rate'])
 epoch = 0
 
-checkpoint = torch.load(config['model_path'], map_location=config['device_split'])
-encoder.load_state_dict(checkpoint['enc_model_state_dict'])
-decoder.load_state_dict(checkpoint['dec_model_state_dict'])
-gcn.load_state_dict(checkpoint['gcn_model_state_dict'])
-vae.load_state_dict(checkpoint['vae_model_state_dict'])
-encoder_optimizer.load_state_dict(checkpoint['enc_optimizer_state_dict'])
-decoder_optimizer.load_state_dict(checkpoint['dec_optimizer_state_dict'])
-gcn_optimizer.load_state_dict(checkpoint['gcn_optimizer_state_dict'])
-vae_optimizer.load_state_dict(checkpoint['vae_optimizer_state_dict'])
-epoch = checkpoint['epoch']
-prev_loss = checkpoint['loss']
+# checkpoint = torch.load(config['model_path'], map_location=config['device_split'])
+# encoder.load_state_dict(checkpoint['enc_model_state_dict'])
+# decoder.load_state_dict(checkpoint['dec_model_state_dict'])
+# vae.load_state_dict(checkpoint['vae_model_state_dict'])
+# encoder_optimizer.load_state_dict(checkpoint['enc_optimizer_state_dict'])
+# decoder_optimizer.load_state_dict(checkpoint['dec_optimizer_state_dict'])
+# vae_optimizer.load_state_dict(checkpoint['vae_optimizer_state_dict'])
+# epoch = checkpoint['epoch']
+# prev_loss = checkpoint['loss']
 
-print("prev loss: {}\n" .format(prev_loss))
-print("starting from epoch: {}\n" .format(epoch + 1))
+# print("prev loss: {}\n" .format(prev_loss))
+# print("starting from epoch: {}\n" .format(epoch + 1))
 
-# encoder.train()
-# decoder.train()
-# gcn.train()
-# vae.train()
-# trainIters(encoder, decoder, gcn, vae, encoder_optimizer, decoder_optimizer, gcn_optimizer, vae_optimizer, train_data_loader, current_epochs = epoch + 1, total_epochs = config['total_epochs'])
+encoder.train()
+decoder.train()
+vae.train()
+trainIters(encoder, decoder, vae, encoder_optimizer, decoder_optimizer, vae_optimizer, train_data_loader, current_epochs = epoch + 1, total_epochs = config['total_epochs'])
 
 print("starting evaluation...\n")
 
 encoder.eval()
 decoder.eval()
-gcn.eval()
 vae.eval()
 
 epoch = 100
@@ -552,4 +582,4 @@ epoch = 100
 
 print("Performing multi split\n")
 
-multi_split(encoder, decoder, gcn, vae, split1_loader, split2_loader, split1_text, split2_text, idx2word)
+multi_split(encoder, decoder, vae, split1_loader, split2_loader, split1_text, split2_text, idx2word)
